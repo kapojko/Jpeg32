@@ -8,13 +8,13 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 
 ## Phase 1: Project Setup
 
-### 1.1 Directory Structure
-- [ ] Create `jpeg_encoder/` root directory
-- [ ] Create `jpeg_encoder/include/` directory
-- [ ] Create `jpeg_encoder/src/` directory
-- [ ] Create `jpeg_encoder/test/` directory
-- [ ] Create `jpeg_encoder/tools/` directory
-- [ ] Create `jpeg_encoder/cmake/` directory
+### 1.1 Directory Structure (under `Jpeg32` project directory)
+- [ ] Create `Jpeg32/` root directory
+- [ ] Create `Jpeg32/include/` directory
+- [ ] Create `Jpeg32/src/` directory
+- [ ] Create `Jpeg32/test/` directory
+- [ ] Create `Jpeg32/tools/` directory
+- [ ] Create `Jpeg32/cmake/` directory
 
 ### 1.2 Build System
 - [ ] Create `CMakeLists.txt` (root)

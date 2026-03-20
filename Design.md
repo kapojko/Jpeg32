@@ -44,7 +44,7 @@ Baseline JPEG encoder for embedded systems (target: AT32F437 Cortex-M4F @ 288MHz
 ## File Structure
 
 ```
-jpeg_encoder/
+Jpeg32/                         # Top-level project directory
 ├── include/
 │   ├── jpeg_encoder.h          # Main API
 │   ├── jpeg_config.h           # Compile configuration
