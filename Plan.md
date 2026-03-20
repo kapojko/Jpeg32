@@ -8,13 +8,14 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 
 ## Phase 1: Project Setup
 
-### 1.1 Directory Structure (under `Jpeg32` project directory)
-- [ ] Create `Jpeg32/` root directory
-- [ ] Create `Jpeg32/include/` directory
-- [ ] Create `Jpeg32/src/` directory
-- [ ] Create `Jpeg32/test/` directory
-- [ ] Create `Jpeg32/tools/` directory
-- [ ] Create `Jpeg32/cmake/` directory
+### 1.1 Directory Structure (under project root)
+- [ ] Create `include/` directory
+- [ ] Create `src/` directory
+- [ ] Create `test/` directory
+- [ ] Create `test/test_images/` directory
+- [ ] Create `tools/` directory
+- [ ] Create `cmake/` directory
+- [ ] Create `plans/` directory
 
 ### 1.2 Build System
 - [ ] Create `CMakeLists.txt` (root)
@@ -83,6 +84,11 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 - [ ] Define Huffman AC chrominance table (values array)
 - [ ] Define zigzag scan order array
 
+### 3.2 jpeg_block_copy.c
+- [ ] Implement `jpeg_block_copy_simple()` with row-by-row memcpy
+- [ ] Handle source stride correctly
+- [ ] Handle edge blocks (partial blocks with padding)
+
 ---
 
 ## Phase 4: Core Processing Modules
@@ -100,6 +106,7 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 - [ ] Implement `jpeg_rgb888_to_ycbcr_block()` for 8×8 block
 - [ ] Implement `jpeg_rgb565_to_ycbcr_block()` for 8×8 block
 - [ ] Implement `jpeg_yuyv_to_ycbcr_block()` for 8×8 block
+- [ ] Implement `jpeg_yuv420_to_ycbcr_block()` for 8×8 block
 - [ ] Implement `jpeg_ycbcr_subsample_420()` for chroma subsampling
 - [ ] Implement `jpeg_ycbcr_subsample_422()` for chroma subsampling
 - [ ] Add SIMD optimization guards for ARM
@@ -348,7 +355,7 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 |------------|-------|-------|
 | CMake | Phase 1 | Build system |
 | CMSIS-DSP | Phase 9 | ARM platform only |
-| Python 3 + PIL | Phase 8 | Test verification |
+| Python 3 + PIL (via uv) | Phase 8 | Test verification |
 | ARM toolchain | Phase 9 | Cross-compilation |
 | AT32 SDK | Phase 9 | EDMA support |
 

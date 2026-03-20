@@ -33,7 +33,7 @@ cmake --build .
 
 ### Verify JPEG output
 
-`python tools/verify_jpeg.py output.jpg original.raw`
+`uv run python tools/verify_jpeg.py output.jpg original.raw`
 
 ## Coding Rules
 

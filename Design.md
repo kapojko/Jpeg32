@@ -38,6 +38,8 @@ Baseline JPEG encoder for embedded systems (target: AT32F437 Cortex-M4F @ 288MHz
 - Within MCU: Sequential block order (see table above)
 - DC encoding: Differential (current - previous)
 - AC encoding: Independent
+- DC predictors: Initialized to 0 at start of image
+- Edge MCUs: Padded with replication of edge pixels (not zero-filled)
 
 ---
 
@@ -94,8 +96,17 @@ typedef enum {
 
 typedef void (*jpeg_block_copy_fn)(
     const uint8_t *src, uint8_t *dst,
-    uint16_t src_stride, uint16_t block_w, uint16_t block_h
+    uint32_t src_stride, uint16_t block_w, uint16_t block_h
 );
+
+typedef enum {
+    JPEG_STATUS_OK = 0,
+    JPEG_STATUS_ERROR_INVALID_PARAM = -1,
+    JPEG_STATUS_ERROR_BUFFER_TOO_SMALL = -2,
+    JPEG_STATUS_ERROR_UNSUPPORTED_FORMAT = -3,
+    JPEG_STATUS_ERROR_UNSUPPORTED_SUBSAMPLE = -4,
+    JPEG_STATUS_ERROR_QUALITY_OUT_OF_RANGE = -5
+} jpeg_status_t;
 
 typedef struct {
     uint16_t            width;
@@ -139,7 +150,7 @@ typedef struct {
     
     // Workspaces
     int16_t             block[64];
-    float               dct_workspace[64];
+    int16_t             dct_workspace[64];
     
     // Huffman state
     uint8_t             bit_buffer;
@@ -166,6 +177,9 @@ uint32_t jpeg_encoder_get_output_size(jpeg_encoder_t *enc);
 
 // Reset for new image
 jpeg_status_t jpeg_encoder_reset(jpeg_encoder_t *enc);
+
+// Initialize DCT (ARM CMSIS-DSP only)
+void jpeg_dct8x8_init(void);
 ```
 
 ---
@@ -266,12 +280,12 @@ jpeg_status_t jpeg_encoder_reset(jpeg_encoder_t *enc);
 | Component | Size |
 |-----------|------|
 | SOI | 2 bytes |
-| APP0 | 18 bytes |
-| DQT (2 tables) | 138 bytes |
+| APP0 | 16 bytes |
+| DQT (2 tables) | 132 bytes |
 | SOF0 | 17 bytes (YUV420) |
 | DHT (4 tables) | 418 bytes |
 | SOS | 12 bytes |
-| **Total** | ~605 bytes |
+| **Total** | ~597 bytes |
 
 ---
 
@@ -305,6 +319,7 @@ jpeg_status_t jpeg_encoder_reset(jpeg_encoder_t *enc);
 
 ```python
 # tools/verify_jpeg.py
+# Usage: uv run python tools/verify_jpeg.py output.jpg original.raw
 
 import sys
 from PIL import Image
@@ -359,6 +374,7 @@ enable_testing()
 add_executable(test_unit
     test/test_main.c
     test/test_unit.c
+    src/jpeg_encoder.c
     src/jpeg_color.c
     src/jpeg_dct.c
     src/jpeg_quantize.c
@@ -451,7 +467,7 @@ int main(void)
 |------------|----------|---------|
 | CMSIS-DSP | ARM only | SIMD-optimized DCT |
 | None | Windows/Other | Reference C implementation |
-| Python + PIL | Test only | JPEG verification |
+| Python + PIL (via uv) | Test only | JPEG verification |
 
 ---
 
