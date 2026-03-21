@@ -95,8 +95,9 @@ typedef enum {
 } jpeg_subsample_t;
 
 typedef void (*jpeg_block_copy_fn)(
-    const uint8_t *src, uint8_t *dst,
-    uint32_t src_stride, uint16_t block_w, uint16_t block_h
+    const uint8_t *src, int16_t *dst_block,
+    uint32_t src_stride, uint16_t x, uint16_t y,
+    uint16_t img_w, uint16_t img_h
 );
 
 typedef enum {
@@ -135,9 +136,10 @@ typedef struct {
     uint16_t            mcu_count_y;
     uint32_t            total_mcus;
     
-    // Scaled quantization tables
-    uint16_t            quant_y[64];
-    uint16_t            quant_c[64];
+    // Scaled quantization reciprocals (multiplier-based division)
+    // recip[k] = (65536 + quant[k]/2) / quant[k]
+    uint16_t            quant_recip_y[64];
+    uint16_t            quant_recip_c[64];
     
     // DC predictors (persist across MCUs)
     int16_t             prev_dc_y;
@@ -146,15 +148,15 @@ typedef struct {
     
     // Runtime state
     uint32_t            current_mcu;
+    uint8_t             current_block_in_mcu;  // 0-5 for 4:2:0 tracking
     uint32_t            output_bytes;
     
     // Workspaces
-    int16_t             block[64];
-    int16_t             dct_workspace[64];
+    int16_t             block[64];              // In-place DCT input/output
     
-    // Huffman state
-    uint8_t             bit_buffer;
-    uint8_t             bits_in_buffer;
+    // Huffman state (32-bit buffer for efficiency)
+    uint32_t            bit_buffer;             // Accumulates up to 24 bits
+    uint8_t             bits_in_buffer;         // 0-23, flush when >= 16
 } jpeg_encoder_t;
 ```
 
@@ -178,8 +180,8 @@ uint32_t jpeg_encoder_get_output_size(jpeg_encoder_t *enc);
 // Reset for new image
 jpeg_status_t jpeg_encoder_reset(jpeg_encoder_t *enc);
 
-// Initialize DCT (ARM CMSIS-DSP only)
-void jpeg_dct8x8_init(void);
+// Initialize quantization reciprocals for given quality
+void jpeg_init_quant_tables(uint8_t quality, jpeg_encoder_t *enc);
 ```
 
 ---
@@ -192,32 +194,35 @@ void jpeg_dct8x8_init(void);
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                   │
 │  1. COPY BLOCK                                                    │
-│     jpeg_block_copy() → Extract MCU from input buffer            │
+│     jpeg_block_copy() → Extract 8×8 block with edge replication  │
 │     [Pluggable: simple memcpy | EDMA 2D]                         │
+│     Output: int16_t block[64] with level-shift (-128) applied    │
 │                                                                   │
 │  2. COLOR CONVERT                                                 │
 │     RGB → YCbCr conversion                                        │
 │     [Optional SIMD optimization]                                  │
 │                                                                   │
-│  3. LEVEL SHIFT                                                   │
-│     Subtract 128 from each component                              │
+│  3. DCT                                                           │
+│     8×8 Forward DCT Type-II using fixed-point AAN algorithm      │
+│     In-place: block[64] input → coefficient output               │
+│     [Conditional: ARM = __SSAT/__SMLAD intrinsics,               │
+│                 Windows = reference C]                            │
 │                                                                   │
-│  4. DCT                                                           │
-│     8×8 Forward DCT using CMSIS-DSP or reference                  │
-│     [Conditional: ARM = CMSIS-DSP, Windows = reference C]        │
+│  4. QUANTIZE + ZIGZAG                                             │
+│     coeff = (block[i] * quant_recip[i]) >> 16                     │
+│     zigzag reorder: block[zigzag[i]] → zz_block[i]               │
 │                                                                   │
-│  5. QUANTIZE                                                      │
-│     Divide by quantization table, round, zigzag reorder          │
-│                                                                   │
-│  6. DC DIFFERENTIAL                                               │
+│  5. DC DIFFERENTIAL                                               │
 │     diff = DC - prev_dc, update prev_dc                          │
 │                                                                   │
-│  7. HUFFMAN ENCODE                                                │
-│     DC: Huffman encode difference                                 │
-│     AC: Run-length + Huffman encode                               │
+│  6. HUFFMAN ENCODE                                                │
+│     DC: Huffman encode difference using lookup table              │
+│     AC: Run-length + Huffman encode using lookup table            │
+│     Output: Bits accumulated in 32-bit buffer                     │
 │                                                                   │
-│  8. OUTPUT                                                        │
-│     Write to output buffer                                        │
+│  7. OUTPUT                                                        │
+│     Flush 16-bit chunks from bit_buffer to output                 │
+│     Handle 0xFF stuffing (0xFF → 0xFF 0x00)                      │
 │                                                                   │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -226,29 +231,33 @@ void jpeg_dct8x8_init(void);
 
 ## Cross-Platform Support
 
-### DCT Implementation Selection
+### DCT Implementation
 
 ```c
 // jpeg_config.h
 
-#if defined(__ARM_ARCH_7EM__) && defined(__FPU_PRESENT)
-    #define JPEG_USE_CMSIS_DSP  1
+#if defined(__ARM_ARCH_7EM__) && defined(__ARM_FEATURE_DSP)
+    #define JPEG_USE_ARM_DSP  1
+    // Uses __SSAT and __SMLAD intrinsics for AAN DCT
 #else
-    #define JPEG_USE_CMSIS_DSP  0
+    #define JPEG_USE_ARM_DSP  0
 #endif
 ```
 
 ```c
 // jpeg_dct.c
 
-#if JPEG_USE_CMSIS_DSP
-    #include "arm_math.h"
-    // Use arm_dct4_f32()
+#if JPEG_USE_ARM_DSP
+    // Fast AAN DCT using 16-bit fixed-point with DSP extensions
+    // 1D DCT: 8 multiplies, 26 additions (scaled)
+    void jpeg_dct8x8_arm(const int16_t *block);
 #else
-    // Reference C implementation
-    void jpeg_dct8x8_ref(const int16_t *input, int16_t *output);
+    // Reference C implementation using 32-bit intermediates
+    void jpeg_dct8x8_ref(int16_t *block);  // In-place
 #endif
 ```
+
+**Note on FPU**: While the AT32F437 has an FPU, fixed-point integer DCT is 2-3× faster than single-precision float for this algorithm and avoids FPU context save overhead in interrupt handlers.
 
 ### Block Copy Selection
 
@@ -275,6 +284,23 @@ void jpeg_dct8x8_init(void);
 | SOS | 0xFFDA | Start of Scan |
 | EOI | 0xFFD9 | End of Image |
 
+### Huffman Table Format
+
+Huffman tables are pre-decoded into fast lookup structures:
+
+```c
+typedef struct {
+    uint8_t  symbol;        // For DC: category (0-11). For AC: (run<<4)|category
+    uint8_t  code_len;      // Actual bit length (1-16)
+    uint16_t code;          // Left-aligned bit pattern
+} huff_entry_t;
+
+// DC tables: 12 entries (categories 0-11)
+// AC tables: 256 entries indexed by (run<<4)|size for O(1) lookup
+huff_entry_t huff_dc_y[12];
+huff_entry_t huff_ac_y[256];
+```
+
 ### Header Size Estimate
 
 | Component | Size |
@@ -283,9 +309,9 @@ void jpeg_dct8x8_init(void);
 | APP0 | 16 bytes |
 | DQT (2 tables) | 132 bytes |
 | SOF0 | 17 bytes (YUV420) |
-| DHT (4 tables) | 418 bytes |
+| DHT (4 tables) | 432 bytes (with pre-computed lengths) |
 | SOS | 12 bytes |
-| **Total** | ~597 bytes |
+| **Total** | ~611 bytes |
 
 ---
 
@@ -296,10 +322,10 @@ void jpeg_dct8x8_init(void);
 | Module | Test Cases |
 |--------|------------|
 | `jpeg_color.c` | RGB→YCbCr accuracy, boundary values |
-| `jpeg_dct.c` | DCT forward/inverse consistency |
+| `jpeg_dct.c` | DCT forward/inverse consistency, fixed-point precision |
 | `jpeg_quantize.c` | Zigzag order, quantization accuracy |
-| `jpeg_huffman.c` | DC/AC encoding, bit stream output |
-| `jpeg_block_copy.c` | Stride handling, boundary conditions |
+| `jpeg_huffman.c` | DC/AC encoding, bit stream output, 0xFF stuffing |
+| `jpeg_block_copy.c` | Stride handling, edge replication padding |
 | `jpeg_header.c` | Header byte-level correctness |
 
 ### End-to-End Tests
@@ -422,9 +448,9 @@ add_test(NAME E2ETests COMMAND test_e2e)
 |--------|------|
 | Input frame (RGB888, 5MP) | 15.1 MB |
 | Output buffer (worst case) | 1 MB |
-| Encoder workspace | 512 bytes |
-| Quantization tables | 256 bytes |
-| Huffman tables | 512 bytes |
+| Encoder workspace | 384 bytes |
+| Quantization reciprocals | 256 bytes |
+| Huffman lookup tables | ~550 bytes |
 | **Total** | ~16.5 MB |
 
 ---
@@ -465,7 +491,7 @@ int main(void)
 
 | Dependency | Platform | Purpose |
 |------------|----------|---------|
-| CMSIS-DSP | ARM only | SIMD-optimized DCT |
+| ARM DSP Intrinsics | ARM only | `__SSAT`, `__SMLAD` for fast fixed-point DCT |
 | None | Windows/Other | Reference C implementation |
 | Python + PIL (via uv) | Test only | JPEG verification |
 
@@ -484,4 +510,19 @@ ctest --output-on-failure
 mkdir build_arm && cd build_arm
 cmake .. -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi.cmake
 cmake --build .
+```
+
+---
+
+## Key Implementation Notes
+
+1. **Fixed-Point DCT**: Uses AAN (Arai/Agui/Nakajima) algorithm with 16-bit coefficients and 32-bit accumulators. In-place operation overwrites `block[64]`.
+
+2. **Quantization**: Uses reciprocal multiplication (`(coeff * recip) >> 16`) instead of division for 12-cycle speedup per coefficient on Cortex-M4.
+
+3. **Streaming Support**: `current_block_in_mcu` tracks position within multi-block MCUs (4:2:0 = 6 blocks) to allow resuming encoding after interruptions.
+
+4. **Huffman Efficiency**: 32-bit `bit_buffer` accumulates up to 24 bits before flushing to memory, reducing store operations by 3× compared to byte-wise output.
+
+5. **Edge Handling**: Block copy function replicates edge pixels for MCUs at image boundaries, ensuring all DCT inputs are full 8×8 blocks.
 ```

@@ -36,7 +36,7 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 - [ ] Define `JPEG_QUALITY_DEFAULT`, `JPEG_QUALITY_MIN`, `JPEG_QUALITY_MAX`
 - [ ] Define `JPEG_BLOCK_SIZE` (8)
 - [ ] Define MCU size constants
-- [ ] Define platform detection macros (`JPEG_USE_CMSIS_DSP`)
+- [ ] Define platform detection macros (`JPEG_USE_ARM_DSP` using `__ARM_FEATURE_DSP`)
 - [ ] Define `JPEG_DEFAULT_BLOCK_COPY` macro
 - [ ] Add debug/trace macros
 
@@ -44,24 +44,51 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 - [ ] Define `jpeg_format_t` enum (RGB888, RGB565, YUYV, YUV420, GRAYSCALE)
 - [ ] Define `jpeg_subsample_t` enum (444, 420, 422, GRAY)
 - [ ] Define `jpeg_status_t` enum (OK, error codes)
-- [ ] Define `jpeg_block_copy_fn` function pointer type
+- [ ] Define `jpeg_block_copy_fn` function pointer type with signature:
+  ```c
+  typedef void (*jpeg_block_copy_fn)(
+      const uint8_t *src, int16_t *dst_block,
+      uint32_t src_stride, uint16_t x, uint16_t y,
+      uint16_t img_w, uint16_t img_h
+  );
+  ```
 - [ ] Define `jpeg_config_t` structure
-- [ ] Define `jpeg_encoder_t` structure
+- [ ] Define `jpeg_encoder_t` structure with:
+  - `quant_recip_y[64]`, `quant_recip_c[64]` (reciprocals, not tables)
+  - `current_block_in_mcu` for streaming support
+  - `block[64]` for in-place DCT (no separate dct_workspace)
+  - `bit_buffer` as `uint32_t` (accumulates up to 24 bits)
 - [ ] Declare public API functions
 - [ ] Add include guards
 
 ### 2.3 jpeg_tables.h
-- [ ] Declare `jpeg_quant_table_y[64]` (luminance)
-- [ ] Declare `jpeg_quant_table_c[64]` (chrominance)
+- [ ] Declare `jpeg_quant_table_y[64]` (luminance, base values)
+- [ ] Declare `jpeg_quant_table_c[64]` (chrominance, base values)
 - [ ] Declare Huffman DC luminance tables (bits, vals)
 - [ ] Declare Huffman DC chrominance tables (bits, vals)
 - [ ] Declare Huffman AC luminance tables (bits, vals)
 - [ ] Declare Huffman AC chrominance tables (bits, vals)
 - [ ] Declare `jpeg_zigzag[64]` scan order
+- [ ] Define `huff_entry_t` structure for O(1) Huffman lookup:
+  ```c
+  typedef struct {
+      uint8_t  symbol;
+      uint8_t  code_len;
+      uint16_t code;
+  } huff_entry_t;
+  ```
+- [ ] Declare pre-decoded Huffman lookup tables (`huff_dc_y[12]`, `huff_ac_y[256]`, etc.)
 - [ ] Define color conversion constants (fixed-point)
 
 ### 2.4 jpeg_block_copy.h
-- [ ] Declare `jpeg_block_copy_simple()`
+- [ ] Declare `jpeg_block_copy_simple()` with signature:
+  ```c
+  void jpeg_block_copy_simple(const uint8_t *src, int16_t *dst_block,
+      uint32_t src_stride, uint16_t x, uint16_t y,
+      uint16_t img_w, uint16_t img_h);
+  ```
+- [ ] Implement edge replication for boundary blocks
+- [ ] Apply level-shift (-128) to output
 - [ ] Declare `jpeg_block_copy_edma()` (stub for ARM)
 - [ ] Declare `jpeg_block_copy_edma_init()`
 - [ ] Declare `jpeg_block_copy_edma_is_busy()`
@@ -72,8 +99,8 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 ## Phase 3: Table Data
 
 ### 3.1 jpeg_tables.c
-- [ ] Define standard luminance quantization table (ITU-R BT.601)
-- [ ] Define standard chrominance quantization table
+- [ ] Define standard luminance quantization table (ITU-R BT.601) - base values
+- [ ] Define standard chrominance quantization table - base values
 - [ ] Define Huffman DC luminance table (bits count array)
 - [ ] Define Huffman DC luminance table (values array)
 - [ ] Define Huffman DC chrominance table (bits count array)
@@ -83,6 +110,8 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 - [ ] Define Huffman AC chrominance table (bits count array)
 - [ ] Define Huffman AC chrominance table (values array)
 - [ ] Define zigzag scan order array
+- [ ] Implement `jpeg_build_huffman_lookup()` to decode Huffman tables into `huff_entry_t` arrays
+- [ ] Pre-compute Huffman lookup tables on init
 
 ### 3.2 jpeg_block_copy.c
 - [ ] Implement `jpeg_block_copy_simple()` with row-by-row memcpy
@@ -101,6 +130,16 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 - [ ] Implement `jpeg_block_copy_edma()` (stub or ARM-only)
 - [ ] Implement `jpeg_block_copy_edma_is_busy()` (stub or ARM-only)
 
+### 4.1 jpeg_block_copy.c
+- [ ] Implement `jpeg_block_copy_simple()` with row-by-row memcpy
+- [ ] Handle source stride correctly
+- [ ] Handle edge blocks with pixel replication (not zero-fill)
+- [ ] Apply level-shift (-128) during copy
+- [ ] Output to `int16_t` block (not `uint8_t`)
+- [ ] Implement `jpeg_block_copy_edma_init()` (stub or ARM-only)
+- [ ] Implement `jpeg_block_copy_edma()` (stub or ARM-only)
+- [ ] Implement `jpeg_block_copy_edma_is_busy()` (stub or ARM-only)
+
 ### 4.2 jpeg_color.c
 - [ ] Implement `jpeg_rgb_to_ycbcr()` for single pixel (fixed-point)
 - [ ] Implement `jpeg_rgb888_to_ycbcr_block()` for 8×8 block
@@ -112,24 +151,33 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 - [ ] Add SIMD optimization guards for ARM
 
 ### 4.3 jpeg_dct.c
-- [ ] Implement `jpeg_dct8x8_ref()` reference C implementation
-- [ ] Implement `jpeg_dct8x8_init()` for CMSIS-DSP initialization
-- [ ] Implement `jpeg_dct8x8()` with platform selection
-- [ ] Add `#if JPEG_USE_CMSIS_DSP` branch for CMSIS-DSP
-- [ ] Verify output matches reference within tolerance
+- [ ] Implement `jpeg_dct8x8_ref()` reference C implementation (in-place, 32-bit intermediates)
+- [ ] Implement `jpeg_dct8x8_arm()` using `__SSAT` and `__SMLAD` intrinsics (AAN algorithm)
+- [ ] Implement `jpeg_dct8x8()` with platform selection via `#if JPEG_USE_ARM_DSP`
+- [ ] DCT operates in-place on `block[64]` (no separate output buffer)
+- [ ] Use 16-bit coefficients with 32-bit accumulators for AAN algorithm
+- [ ] Verify ARM output matches reference within tolerance
 
 ### 4.4 jpeg_quantize.c
-- [ ] Implement `jpeg_quantize_scale()` to scale tables by quality
-- [ ] Implement `jpeg_quantize_block()` divide and round
+- [ ] Implement `jpeg_quantize_scale()` to scale base tables by quality
+- [ ] Implement `jpeg_init_quant_tables()` to compute reciprocals:
+  ```c
+  recip[k] = (65536 + quant[k]/2) / quant[k]
+  ```
+- [ ] Implement `jpeg_quantize_block()` using reciprocal multiplication:
+  ```c
+  coeff = (block[i] * recip[i]) >> 16
+  ```
 - [ ] Implement `jpeg_zigzag_reorder()` to reorder coefficients
 - [ ] Implement combined `jpeg_quantize_zigzag()` for efficiency
 
 ### 4.5 jpeg_huffman.c
-- [ ] Implement `jpeg_huff_encode_dc()` for DC coefficient
-- [ ] Implement `jpeg_huff_encode_ac()` for AC coefficients with RLE
-- [ ] Implement `jpeg_bitstream_write()` for bit-level output
+- [ ] Implement `jpeg_huff_encode_dc()` using O(1) huff_entry lookup
+- [ ] Implement `jpeg_huff_encode_ac()` using O(1) lookup with (run<<4)|category index
+- [ ] Implement `jpeg_bitstream_write()` using 32-bit `bit_buffer`
 - [ ] Implement `jpeg_bitstream_flush()` to flush remaining bits
-- [ ] Handle byte stuffing for 0xFF bytes in output
+- [ ] Handle 0xFF byte stuffing (0xFF → 0xFF 0x00)
+- [ ] Use 32-bit bit_buffer accumulating up to 24 bits before flush
 
 ---
 
@@ -153,17 +201,18 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 ### 6.1 jpeg_encoder.c
 - [ ] Implement `jpeg_encoder_init()` - Initialize state and config
 - [ ] Calculate MCU dimensions from subsampling mode
-- [ ] Scale quantization tables based on quality factor
+- [ ] Call `jpeg_init_quant_tables()` to compute reciprocals from quality
 - [ ] Initialize DC predictors to zero
 - [ ] Implement `jpeg_encoder_encode()` - Full image blocking encode
 - [ ] Implement `jpeg_encoder_encode_mcu()` - Single MCU streaming encode
-- [ ] Implement MCU coordinate calculation
-- [ ] Implement block extraction from input buffer
-- [ ] Chain processing steps: copy → color → DCT → quantize → Huffman
+- [ ] Track `current_block_in_mcu` for multi-block MCU resumption (4:2:0 = 6 blocks)
+- [ ] Implement MCU coordinate calculation from `current_mcu` index
+- [ ] Implement block extraction from input buffer using pluggable `block_copy`
+- [ ] Chain processing steps: copy (+level-shift) → color → DCT (in-place) → quantize+zigzag → Huffman
 - [ ] Update DC predictors after each block
 - [ ] Implement `jpeg_encoder_get_output_size()`
 - [ ] Implement `jpeg_encoder_reset()`
-- [ ] Handle edge MCUs (image not multiple of MCU size)
+- [ ] Handle edge MCUs with pixel replication
 
 ---
 
@@ -185,10 +234,13 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 - [ ] Test DCT of constant block (should have DC only)
 - [ ] Test DCT of impulse (single non-zero pixel)
 - [ ] Test DCT forward and inverse consistency
-- [ ] Compare CMSIS-DSP vs reference output
+- [ ] Test fixed-point precision with known values
+- [ ] Compare ARM DSP intrinsics vs reference output
 
 ### 7.4 Quantization Tests
 - [ ] Test zigzag reorder correctness
+- [ ] Test reciprocal computation: `recip = (65536 + q/2) / q`
+- [ ] Test reciprocal quantization: `(coeff * recip) >> 16`
 - [ ] Test quantization with quality factor scaling
 - [ ] Test quantization of known coefficient block
 
@@ -200,8 +252,9 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 
 ### 7.6 Block Copy Tests
 - [ ] Test simple copy with stride
-- [ ] Test partial block at image edge
-- [ ] Test various block sizes
+- [ ] Test partial block at image edge with pixel replication
+- [ ] Test level-shift (-128) application
+- [ ] Test output to int16_t block
 
 ### 7.7 Header Tests
 - [ ] Test SOI marker output
@@ -249,11 +302,11 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 
 ## Phase 9: ARM Platform Integration
 
-### 9.1 CMSIS-DSP Integration
-- [ ] Add CMSIS-DSP include path
-- [ ] Link `arm_cortexM4lf_math.lib`
-- [ ] Implement DCT using `arm_dct4_f32()`
-- [ ] Initialize DCT instance in encoder init
+### 9.1 ARM DSP Intrinsics Integration
+- [ ] Verify `__ARM_FEATURE_DSP` is defined for AT32F437
+- [ ] Use `__SSAT` for saturating arithmetic in DCT
+- [ ] Use `__SMLAD` for multiply-accumulate in AAN DCT
+- [ ] Implement `jpeg_dct8x8_arm()` using intrinsics
 - [ ] Test on ARM hardware or simulator
 
 ### 9.2 EDMA Block Copy (Optional)
@@ -268,17 +321,20 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 
 ## Phase 10: Optimization
 
-### 10.1 SIMD Color Conversion
-- [ ] Implement RGB→YCbCr using ARM SIMD intrinsics
-- [ ] Use `__SADD8`, `__QADD8` for parallel operations
-- [ ] Benchmark vs non-SIMD version
+### 10.1 Fixed-Point DCT Optimization
+- [ ] Optimize AAN DCT with loop unrolling
+- [ ] Use inline functions for frequently called operations
+- [ ] Profile DCT performance target: 8 multiplies, 26 additions per 1D DCT
 
-### 10.2 Loop Unrolling
-- [ ] Unroll 8×8 DCT block loops
-- [ ] Unroll zigzag reorder loop
-- [ ] Unroll quantization loop
+### 10.2 Quantization Optimization
+- [ ] Unroll quantization loop over 64 coefficients
+- [ ] Use reciprocal multiplication (already faster than division)
 
-### 10.3 Memory Optimization
+### 10.3 Huffman Encoding Optimization
+- [ ] Use 32-bit bit_buffer (reduces stores 3×)
+- [ ] Pre-compute Huffman lookup tables for O(1) access
+
+### 10.4 Memory Optimization
 - [ ] Use `__attribute__((aligned(4)))` for buffers
 - [ ] Minimize stack usage in functions
 - [ ] Profile and optimize hot paths
@@ -328,6 +384,14 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 - [ ] Memory: < 1MB working set (excluding buffers)
 - [ ] Cross-platform: Builds on Windows and ARM
 
+### Memory Requirements (per Design.md)
+
+| Buffer | Size |
+|--------|------|
+| Encoder workspace | 384 bytes |
+| Quantization reciprocals | 256 bytes |
+| Huffman lookup tables | ~550 bytes |
+
 ---
 
 ## Estimated Effort
@@ -342,10 +406,10 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 | Phase 6: Main Encoder | 6 |
 | Phase 7: Unit Tests | 8 |
 | Phase 8: E2E Tests | 6 |
-| Phase 9: ARM Integration | 4 |
-| Phase 10: Optimization | 6 |
+| Phase 9: ARM Integration | 2 |
+| Phase 10: Optimization | 4 |
 | Phase 11: Documentation | 3 |
-| **Total** | **56 hours** |
+| **Total** | **52 hours** |
 
 ---
 
@@ -354,7 +418,7 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 | Dependency | Phase | Notes |
 |------------|-------|-------|
 | CMake | Phase 1 | Build system |
-| CMSIS-DSP | Phase 9 | ARM platform only |
+| ARM DSP Intrinsics | Phase 9 | `__SSAT`, `__SMLAD` for AAN DCT |
 | Python 3 + PIL (via uv) | Phase 8 | Test verification |
 | ARM toolchain | Phase 9 | Cross-compilation |
 | AT32 SDK | Phase 9 | EDMA support |
@@ -365,7 +429,7 @@ Implement baseline JPEG encoder per Design.md specification. Target: AT32F437 Co
 
 | Risk | Mitigation |
 |------|------------|
-| DCT precision issues | Use 32-bit fixed-point or double-check float precision |
+| DCT precision issues | Use 16-bit fixed-point AAN with 32-bit accumulators, verify precision |
 | Huffman edge cases | Extensive testing with boundary values |
 | Memory alignment on ARM | Use aligned attributes, test on hardware |
 | Byte stuffing bugs | Unit test with 0xFF patterns |
