@@ -27,20 +27,16 @@ else()
     add_compile_options(-Wconversion -Wsign-conversion)
 endif()
 
-# Include directories
-target_include_directories(${PROJECT_NAME} INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
-)
-
 # Create library target
 add_library(${PROJECT_NAME} STATIC
     src/jpeg_encoder.c
+    src/jpeg_header.c
     src/jpeg_tables.c
     src/jpeg_block_copy.c
+    src/jpeg_color.c
     src/jpeg_dct.c
+    src/jpeg_quantize.c
     src/jpeg_huffman.c
-    src/jpeg_bitstream.c
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC
